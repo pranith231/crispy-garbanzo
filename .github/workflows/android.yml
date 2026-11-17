@@ -1,3 +1,4 @@
+
 name: Build ClipForge APK
 
 on:
@@ -7,47 +8,86 @@ on:
       - "ClipForge-AndroidStudio.zip"
       - ".github/workflows/android.yml"
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Download repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Accept Android licenses
+        run: |
+          yes | sdkmanager --licenses || true
 
       - name: Install Android SDK 35
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "platform-tools"
 
-      - name: Install Gradle 8.9
+      - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      - name: Extract ClipForge project
+      - name: Check and extract project
         run: |
-          unzip -q ClipForge-AndroidStudio.zip -d buildsrc
-          ls buildsrc/ClipForge
+          if [ ! -f "ClipForge-AndroidStudio.zip" ]; then
+            echo "ERROR: ClipForge ZIP not found in repository root."
+            exit 1
+          fi
 
-      - name: Build debug APK
+          mkdir -p buildsrc
+          unzip -q ClipForge-AndroidStudio.zip -d buildsrc
+
+          PROJECT_FILE=$(find buildsrc -name settings.gradle.kts -print -quit)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: Android project settings.gradle.kts not found."
+            find buildsrc -maxdepth 4 -type f
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Found project: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
+
+      - name: Build ClipForge APK
         run: |
           gradle --no-daemon \
-            -p buildsrc/ClipForge \
-            assembleDebug
+            -p "$PROJECT_DIR" \
+            clean assembleDebug
+
+          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ClipForge-debug-APK
-          path: buildsrc/ClipForge/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
-          
+          retention-days: 7
